@@ -15,22 +15,34 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::thread;
 use std::time::Duration;
 
+use crossbeam_queue::SegQueue;
+use std::sync::Arc;
+use serde::Deserialize;
+
+#[derive(Deserialize)]
+struct IncomingTask {
+    name: String,
+    freq_start: f64,
+    freq_end: f64,
+    time_start: f64,
+    time_end: f64,
+    amplifier: String, // Amplifier représenté sous forme de String dans le JSON
+}
+
 /// Application principale représentant un diagramme de Gantt fréquentiel et temporel.
 pub struct MyApp {
+    /// Queue partagée pour les messages provenant de stdin.
+    msg_queue: Arc<SegQueue<String>>,
     /// Liste des tâches à afficher dans le diagramme.
     pub tasks: Vec<Task>,
     /// Limites actuelles de la vue en X (bande fréquentielle).
     pub plot_bounds_x: Option<(f64, f64)>,
     /// Dernière valeur connue des limites X (pour détection de changement).
     pub last_bounds_x: Option<(f64, f64)>,
-    /// Canal de réception d'un pas d'exécution cyclique.
-    pub receiver: Receiver<usize>,
     /// Émetteur pour transmettre la position du curseur sur le graphique.
     pub label_tx: Sender<PlotPoint>,
     /// Récepteur associé au canal d'envoi du curseur.
     pub label_rx: Receiver<PlotPoint>,
-    /// Étape actuelle (0 à 4) du cycle de démonstration.
-    pub step: usize,
     /// Indique si le mode logarithmique était actif précédemment.
     pub old_log_scale: bool,
     /// Indique si l'affichage utilise l'échelle logarithmique des fréquences.
@@ -43,30 +55,16 @@ pub struct MyApp {
 
 impl MyApp {
     /// Crée une nouvelle instance de l'application `MyApp` et démarre un thread d'animation cyclique.
-    pub fn new() -> Self {
-        let (tx, rx) = channel();
+    pub fn new(queue: Arc<SegQueue<String>>) -> Self {
         let (label_tx, label_rx) = channel();
 
-        // Thread de démonstration : change de scénario toutes les 2 secondes
-        thread::spawn(move || {
-            let mut step = 0;
-            loop {
-                thread::sleep(Duration::from_secs(2));
-                if tx.send(step).is_err() {
-                    break;
-                }
-                step = (step + 1) % 5;
-            }
-        });
-
         Self {
+            msg_queue: queue,
             tasks: vec![],
             plot_bounds_x: Some(get_bounds(false)),
             last_bounds_x: Some((0., 1.)),
-            receiver: rx,
             label_tx,
             label_rx,
-            step: 0,
             old_log_scale: false,
             log_scale: false,
             zoom_band: None,
@@ -85,38 +83,32 @@ impl MyApp {
         ]
     }
 
-    /// Met à jour les tâches affichées en fonction de l'étape courante.
-    ///
-    /// Ce mécanisme est utilisé à des fins de démonstration ou de test.
-    pub fn update_tasks(&mut self, step: usize) {
-        match step {
-            0 => self.tasks.push(Task {
-                name: "Init capteurs".into(),
-                freq_start: 100.,
-                freq_end: 300.,
-                time_start: 0.,
-                time_end: 300.,
-                amplifier: Amplifier::A20_500,
-            }),
-            1 => self.tasks.push(Task {
-                name: "Transmission".into(),
-                freq_start: 1000.,
-                freq_end: 2500.,
-                time_start: 300.,
-                time_end: 600.,
-                amplifier: Amplifier::A1000_2500,
-            }),
-            2 => { self.tasks.pop(); },
-            3 => self.tasks.push(Task {
-                name: "Sleep mode".into(),
-                freq_start: 5000.,
-                freq_end: 5500.,
-                time_start: 0.,
-                time_end: 1000.,
-                amplifier: Amplifier::A2400_6000,
-            }),
-            4 => self.tasks.clear(),
-            _ => {}
+    /// Gère les messages reçus de la queue partagée.
+    fn handle_message(&mut self, json: String) {
+        eprintln!("Réception depuis la queue : {}", json);
+
+        // Désérialisation du JSON en liste de tâches
+        match serde_json::from_str::<IncomingTask>(&json) {
+            Ok(incoming) => {
+                // Reset de la liste des tâches
+                self.tasks.clear();
+
+                // Ajout de la tâche reçue
+                self.tasks.push(Task {
+                    name: incoming.name,
+                    freq_start: incoming.freq_start,
+                    freq_end: incoming.freq_end,
+                    time_start: incoming.time_start,
+                    time_end: incoming.time_end,
+                    amplifier: Amplifier::from_str(&incoming.amplifier)
+                        .unwrap_or(Amplifier::A20_500),
+                });
+
+                eprintln!("Réception : remplacement par {} tâches.", self.tasks.len());
+            }
+            Err(e) => {
+                eprintln!("Erreur JSON : {:?}", e);
+            }
         }
     }
 }
@@ -128,12 +120,12 @@ impl MyApp {
 /// ainsi que les interactions avec les utilisateurs.
 impl eframe::App for MyApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Mise à jour des tâches en fonction de l'étape actuelle
-        if let Ok(step) = self.receiver.try_recv() {
-            self.step = step;
-            self.update_tasks(step);
+        /// Tant que réception des messages de la queue partagée
+        while let Some(msg) = self.msg_queue.pop() {
+            println!("UI a reçu depuis la queue : {}", msg);
+            self.handle_message(msg);
         }
-
+        
         // Mise à jour des limites X du graphe principal
         if self.log_scale != self.old_log_scale {
             self.old_log_scale = self.log_scale;

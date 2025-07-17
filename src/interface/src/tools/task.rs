@@ -35,6 +35,19 @@ impl Amplifier {
             Amplifier::A2400_6000 => Color32::from_rgb(174, 37, 115),
         }
     }
+
+    /// Conversion Amplifier depuis une chaîne de caractères.
+    /// Si la chaîne ne correspond à aucun amplificateur, retourne `None`.
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "A20_500" => Some(Amplifier::A20_500),
+            "A500_1000" => Some(Amplifier::A500_1000),
+            "A960_1215" => Some(Amplifier::A960_1215),
+            "A1000_2500" => Some(Amplifier::A1000_2500),
+            "A2400_6000" => Some(Amplifier::A2400_6000),
+            _ => None,
+        }
+    }
 }
 
 /// Structure représentant une tâche dans le diagramme fréquence/temps.

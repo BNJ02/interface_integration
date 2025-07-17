@@ -44,8 +44,10 @@ fn main() -> eframe::Result<()> {
         });
     }
 
+    eprintln!("Lancement de l'application...");
+
     // Création de l’application
-    let app = MyApp::new();
+    let app = MyApp::new(msg_queue.clone());
 
     // Configuration des options natives eframe (taille de la fenêtre, etc.)
     let options = eframe::NativeOptions {
